@@ -1,4 +1,4 @@
-import 'dotenv/config';
+﻿import 'dotenv/config';
 
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -76,13 +76,13 @@ function renderLoginPage({ error = '', next = '/' } = {}) {
   <body>
     <main>
       <h1>Codex Remote</h1>
-      <p>请输入部署时生成的访问口令。</p>
+      <p>Enter the access token from the local .env file.</p>
       ${errorHtml}
       <form method="post" action="/login">
         <input type="hidden" name="next" value="${safeNext}" />
-        <label for="token">访问口令</label>
+        <label for="token">Access token</label>
         <input id="token" name="token" type="password" autocomplete="current-password" autofocus required />
-        <button type="submit">登录</button>
+        <button type="submit">Login</button>
       </form>
     </main>
   </body>
@@ -100,7 +100,7 @@ app.get('/login', (req, res) => {
 app.post('/login', (req, res) => {
   const next = sanitizeNext(req.body.next);
   if (!isAppTokenValueValid(req.body.token, config)) {
-    res.status(401).type('html').send(renderLoginPage({ error: '口令不正确。', next }));
+    res.status(401).type('html').send(renderLoginPage({ error: 'Invalid access token.', next }));
     return;
   }
   res.cookie(config.authCookieName, config.appAuthToken, authCookieOptions(req));
@@ -112,22 +112,86 @@ app.get('/logout', (req, res) => {
   res.redirect('/login');
 });
 
-app.use(httpAuthMiddleware(config));
-app.use('/vendor/xterm', express.static(xtermDir, { immutable: true, maxAge: '1h' }));
-app.use(express.static(publicDir, {
-  maxAge: 0,
-  setHeaders(res) {
-    res.setHeader('Cache-Control', 'no-cache');
-  }
-}));
-app.get('*', (_req, res) => {
-  res.sendFile(path.join(publicDir, 'index.html'));
-});
-
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 const clients = new Map();
 let controllerId = null;
+const activityLog = [];
+const terminalTail = [];
+let partialTerminalLine = '';
+let contextBroadcastTimer = null;
+
+function stripAnsi(value) {
+  return String(value ?? '')
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))/g, '')
+    .replace(/\r/g, '');
+}
+
+function truncate(value, max = 220) {
+  const text = String(value ?? '');
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function pushActivity(type, text, extra = {}) {
+  const item = {
+    id: randomUUID(),
+    at: new Date().toISOString(),
+    type,
+    text: truncate(text),
+    sessionId: session.snapshot().sessionId,
+    sessionLabel: session.snapshot().sessionLabel,
+    ...extra
+  };
+  activityLog.push(item);
+  while (activityLog.length > 40) activityLog.shift();
+  broadcast({ type: 'activity', item, context: contextPayload() });
+}
+
+function appendTerminalTail(data) {
+  const text = stripAnsi(data);
+  if (!text.trim()) return;
+
+  partialTerminalLine += text;
+  const lines = partialTerminalLine.split('\n');
+  partialTerminalLine = lines.pop() || '';
+
+  for (const line of lines) {
+    const clean = line.trim();
+    if (!clean) continue;
+    terminalTail.push({
+      at: new Date().toISOString(),
+      text: truncate(clean, 260),
+      sessionId: session.snapshot().sessionId
+    });
+  }
+
+  if (partialTerminalLine.length > 260) {
+    terminalTail.push({
+      at: new Date().toISOString(),
+      text: truncate(partialTerminalLine, 260),
+      sessionId: session.snapshot().sessionId
+    });
+    partialTerminalLine = '';
+  }
+
+  while (terminalTail.length > 30) terminalTail.shift();
+  scheduleContextBroadcast();
+}
+
+function contextPayload() {
+  return {
+    activity: activityLog.slice(-20),
+    terminalTail: terminalTail.slice(-16)
+  };
+}
+
+function scheduleContextBroadcast() {
+  if (contextBroadcastTimer) return;
+  contextBroadcastTimer = setTimeout(() => {
+    contextBroadcastTimer = null;
+    broadcast({ type: 'context', context: contextPayload() });
+  }, 900);
+}
 
 function safeSend(ws, payload) {
   if (ws.readyState !== ws.OPEN) return;
@@ -171,6 +235,59 @@ function sendPresence() {
     clients: clientSummary()
   });
 }
+
+function statePayload() {
+  return {
+    ok: true,
+    config: publicConfig(),
+    session: session.snapshot(),
+    controllerId,
+    clients: clientSummary(),
+    context: contextPayload()
+  };
+}
+
+function sendApiAuthFailure(res, auth) {
+  res
+    .status(auth.status)
+    .type('application/json')
+    .send(JSON.stringify({
+      ok: false,
+      status: auth.status,
+      reason: auth.reason,
+      loginRequired: Boolean(auth.loginRequired)
+    }));
+}
+
+app.get('/api/state', (req, res) => {
+  const auth = authorizeRequest(req, config);
+  if (!auth.ok) {
+    sendApiAuthFailure(res, auth);
+    return;
+  }
+  res.json(statePayload());
+});
+
+app.get('/api/context', (req, res) => {
+  const auth = authorizeRequest(req, config);
+  if (!auth.ok) {
+    sendApiAuthFailure(res, auth);
+    return;
+  }
+  res.json({ ok: true, context: contextPayload() });
+});
+
+app.use(httpAuthMiddleware(config));
+app.use('/vendor/xterm', express.static(xtermDir, { immutable: true, maxAge: '1h' }));
+app.use(express.static(publicDir, {
+  maxAge: 0,
+  setHeaders(res) {
+    res.setHeader('Cache-Control', 'no-cache');
+  }
+}));
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(publicDir, 'index.html'));
+});
 
 function setController(nextControllerId) {
   if (controllerId && clients.has(controllerId)) {
@@ -239,12 +356,20 @@ server.on('upgrade', (req, socket, head) => {
   });
 });
 
+let lastRecordedSessionKey = '';
+
 session.on('output', (data) => {
   history.append(data);
+  appendTerminalTail(data);
   broadcast({ type: 'output', data });
 });
 
 session.on('status', (snapshot) => {
+  const key = `${snapshot.sessionId || 'none'}:${snapshot.status}:${snapshot.exitCode ?? ''}`;
+  if (key !== lastRecordedSessionKey) {
+    lastRecordedSessionKey = key;
+    pushActivity('session', `Session ${snapshot.sessionLabel || snapshot.sessionId || 'not started'} is ${snapshot.status}`);
+  }
   broadcast({ type: 'status', session: snapshot });
 });
 
@@ -265,6 +390,7 @@ wss.on('connection', (ws, _req, auth) => {
 
   clients.set(id, client);
   if (!controllerId) controllerId = id;
+  pushActivity('client', `${client.email} connected as ${client.role}`, { clientId: id });
 
   ws.on('pong', () => {
     client.isAlive = true;
@@ -277,7 +403,8 @@ wss.on('connection', (ws, _req, auth) => {
     config: publicConfig(),
     session: session.snapshot(),
     controllerId,
-    clients: clientSummary()
+    clients: clientSummary(),
+    context: contextPayload()
   });
 
   const scrollback = history.toString();
@@ -304,6 +431,7 @@ wss.on('connection', (ws, _req, auth) => {
         return;
       }
       setController(id);
+      pushActivity('control', `${client.email} took control`, { clientId: id });
       return;
     }
 
@@ -315,18 +443,21 @@ wss.on('connection', (ws, _req, auth) => {
 
     if (message.type === 'start') {
       if (!isController(client)) return sendError(ws, 'Only the controller can start Codex.');
+      pushActivity('control', `${client.email} started Codex`, { clientId: id });
       session.start();
       return;
     }
 
     if (message.type === 'stop') {
       if (!isController(client)) return sendError(ws, 'Only the controller can stop Codex.');
+      pushActivity('control', `${client.email} stopped Codex`, { clientId: id });
       await session.stop();
       return;
     }
 
     if (message.type === 'restart') {
       if (!isController(client)) return sendError(ws, 'Only the controller can restart Codex.');
+      pushActivity('control', `${client.email} restarted Codex`, { clientId: id });
       history.clear();
       broadcast({ type: 'clear' });
       await session.restart();
@@ -339,6 +470,10 @@ wss.on('connection', (ws, _req, auth) => {
       if (Buffer.byteLength(data, 'utf8') > config.maxInputBytes) {
         sendError(ws, `Input is too large. Limit: ${config.maxInputBytes} bytes.`);
         return;
+      }
+      const printable = stripAnsi(data).replace(/[\r\n]+/g, ' ').trim();
+      if (printable && (data.includes('\r') || data.includes('\n') || printable.length > 1)) {
+        pushActivity('input', `${client.email}: ${printable}`, { clientId: id });
       }
       session.write(data);
       return;
@@ -354,6 +489,7 @@ wss.on('connection', (ws, _req, auth) => {
       };
       const data = macros[message.name];
       if (!data) return sendError(ws, 'Unknown macro.');
+      pushActivity('macro', `${client.email}: ${message.name}`, { clientId: id });
       session.write(data);
       return;
     }
@@ -363,6 +499,7 @@ wss.on('connection', (ws, _req, auth) => {
 
   ws.on('close', () => {
     clients.delete(id);
+    pushActivity('client', `${client.email} disconnected`, { clientId: id });
     if (controllerId === id) controllerId = null;
     promoteFirstClientIfNeeded();
   });

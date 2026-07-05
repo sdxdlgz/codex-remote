@@ -17,6 +17,8 @@ const el = {
   clientIdText: document.getElementById('clientIdText'),
   controllerText: document.getElementById('controllerText'),
   clientsText: document.getElementById('clientsText'),
+  activityList: document.getElementById('activityList'),
+  terminalTailList: document.getElementById('terminalTailList'),
   terminalHint: document.getElementById('terminalHint'),
   clearButton: document.getElementById('clearButton'),
   sendForm: document.getElementById('sendForm'),
@@ -66,6 +68,7 @@ const state = {
   config: null,
   session: null,
   clients: [],
+  context: { activity: [], terminalTail: [] },
   controllerId: null,
   reconnectMs: 750,
   reconnectTimer: null,
@@ -74,6 +77,10 @@ const state = {
   lastRows: 30,
   lastClose: null
 };
+
+function pageUrl(path) {
+  return `${window.location.origin}${path}`;
+}
 
 function wsUrl() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -130,6 +137,65 @@ function controllerClient() {
   return state.clients.find((client) => client.id === state.controllerId || client.role === 'controller');
 }
 
+function contextIcon(type) {
+  const icons = {
+    input: 'You',
+    macro: 'Macro',
+    control: 'Control',
+    session: 'Session',
+    client: 'Client'
+  };
+  return icons[type] || 'Event';
+}
+
+function renderContextList(node, items, emptyText, mapper) {
+  if (!items || items.length === 0) {
+    node.innerHTML = `<div class="empty-context">${emptyText}</div>`;
+    return;
+  }
+
+  node.innerHTML = items
+    .slice()
+    .reverse()
+    .map(mapper)
+    .join('');
+}
+
+function renderContext() {
+  renderContextList(
+    el.activityList,
+    state.context.activity,
+    'No recent activity yet.',
+    (item) => `
+      <div class="context-item">
+        <div class="context-meta">${contextIcon(item.type)} | ${formatTime(item.at)} | ${item.sessionLabel || item.sessionId || '-'}</div>
+        <div class="context-text">${escapeHtml(item.text || '')}</div>
+      </div>
+    `
+  );
+
+  renderContextList(
+    el.terminalTailList,
+    state.context.terminalTail,
+    'No terminal output yet.',
+    (item) => `
+      <div class="context-item terminal-tail-item">
+        <div class="context-meta">${formatTime(item.at)} | ${shortId(item.sessionId)}</div>
+        <div class="context-text monospace">${escapeHtml(item.text || '')}</div>
+      </div>
+    `
+  );
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
 function updateControls() {
   const isController = state.connected && state.role === 'controller';
   el.sendButton.disabled = !isController;
@@ -163,6 +229,7 @@ function updateStatusPanel() {
     controllerId: state.controllerId,
     session: state.session,
     clients: state.clients,
+    context: state.context,
     config: state.config
   };
   el.statusPanel.textContent = JSON.stringify(payload, null, 2);
@@ -204,6 +271,7 @@ function updateUi() {
     : 'no Codex session yet';
 
   updateControls();
+  renderContext();
   updateStatusPanel();
 }
 
@@ -214,6 +282,22 @@ function send(payload) {
   }
   state.ws.send(JSON.stringify(payload));
   return true;
+}
+
+function addLocalActivity(type, text) {
+  state.context.activity = [
+    ...state.context.activity,
+    {
+      id: `local-${Date.now()}`,
+      at: new Date().toISOString(),
+      type,
+      text,
+      sessionId: state.session?.sessionId,
+      sessionLabel: state.session?.sessionLabel || 'local pending'
+    }
+  ].slice(-20);
+  renderContext();
+  updateStatusPanel();
 }
 
 function sendInput(data) {
@@ -264,6 +348,7 @@ function handleMessage(message) {
     state.session = message.session;
     state.controllerId = message.controllerId;
     state.clients = message.clients || [];
+    state.context = message.context || state.context;
     term.clear();
     term.writeln(`\x1b[32m[remote]\x1b[0m connected: ${message.session?.sessionLabel || message.session?.sessionId || 'not started'}`);
     resizeTerminal();
@@ -296,6 +381,19 @@ function handleMessage(message) {
     return;
   }
 
+  if (message.type === 'context') {
+    state.context = message.context || state.context;
+    updateUi();
+    return;
+  }
+
+  if (message.type === 'activity') {
+    if (message.context) state.context = message.context;
+    else if (message.item) state.context.activity = [...state.context.activity, message.item].slice(-20);
+    updateUi();
+    return;
+  }
+
   if (message.type === 'role') {
     state.role = message.role;
     showToast(message.role === 'controller' ? 'You are now the controller' : 'You are now a viewer');
@@ -318,7 +416,37 @@ function scheduleReconnect() {
   state.reconnectMs = Math.min(Math.round(state.reconnectMs * 1.6), 8000);
 }
 
-function connect() {
+async function probeState() {
+  setPhase('checking', `Checking HTTP auth at ${pageUrl('/api/state')}`);
+  const response = await fetch('/api/state', {
+    method: 'GET',
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: { accept: 'application/json' }
+  });
+
+  const contentType = response.headers.get('content-type') || '';
+  const body = contentType.includes('application/json') ? await response.json() : null;
+
+  if (response.status === 401 || response.status === 403) {
+    const reason = body?.reason || `HTTP ${response.status}`;
+    const suffix = body?.loginRequired ? ' Open /login or reload this page to sign in again.' : '';
+    throw new Error(`Auth check failed: ${reason}.${suffix}`);
+  }
+
+  if (!response.ok || !body?.ok) {
+    throw new Error(`State check failed: HTTP ${response.status}`);
+  }
+
+  state.config = body.config || state.config;
+  state.session = body.session || state.session;
+  state.controllerId = body.controllerId || state.controllerId;
+  state.clients = body.clients || state.clients;
+  state.context = body.context || state.context;
+  return body;
+}
+
+async function connect() {
   window.clearTimeout(state.reconnectTimer);
   if (state.ws && [WebSocket.OPEN, WebSocket.CONNECTING].includes(state.ws.readyState)) {
     try { state.ws.close(); } catch {}
@@ -327,7 +455,21 @@ function connect() {
   state.connected = false;
   state.socketOpen = false;
   state.role = state.role || 'viewer';
-  setPhase('connecting', `Connecting to ${wsUrl()}`);
+  setPhase('connecting', `Preparing to connect to ${wsUrl()}`);
+
+  try {
+    await probeState();
+    updateUi();
+  } catch (error) {
+    state.connected = false;
+    state.socketOpen = false;
+    setPhase('error', error.message || `Cannot reach ${pageUrl('/api/state')}`);
+    showToast(error.message || 'Connection check failed');
+    if (!String(error.message || '').includes('Auth check failed')) {
+      scheduleReconnect();
+    }
+    return;
+  }
 
   const ws = new WebSocket(wsUrl());
   state.ws = ws;
@@ -370,11 +512,18 @@ el.sendForm.addEventListener('submit', (event) => {
   event.preventDefault();
   const text = el.lineInput.value;
   if (!text) return;
-  if (sendInput(`${text}\r`)) el.lineInput.value = '';
+  if (sendInput(`${text}\r`)) {
+    addLocalActivity('input', `sent: ${text}`);
+    el.lineInput.value = '';
+  }
 });
 
 document.querySelectorAll('[data-macro]').forEach((button) => {
-  button.addEventListener('click', () => send({ type: 'macro', name: button.dataset.macro }));
+  button.addEventListener('click', () => {
+    if (send({ type: 'macro', name: button.dataset.macro })) {
+      addLocalActivity('macro', `sent macro: ${button.dataset.macro}`);
+    }
+  });
 });
 
 el.retryButton.addEventListener('click', () => {
