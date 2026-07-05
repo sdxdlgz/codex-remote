@@ -114,7 +114,12 @@ app.get('/logout', (req, res) => {
 
 app.use(httpAuthMiddleware(config));
 app.use('/vendor/xterm', express.static(xtermDir, { immutable: true, maxAge: '1h' }));
-app.use(express.static(publicDir, { maxAge: '5m' }));
+app.use(express.static(publicDir, {
+  maxAge: 0,
+  setHeaders(res) {
+    res.setHeader('Cache-Control', 'no-cache');
+  }
+}));
 app.get('*', (_req, res) => {
   res.sendFile(path.join(publicDir, 'index.html'));
 });
