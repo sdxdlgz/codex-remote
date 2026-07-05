@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>Codex Remote</title>
+    <link rel="stylesheet" href="/vendor/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Codex Remote</h1>
+        <p id="subtitle">Connecting...</p>
+      </div>
+      <div class="badges">
+        <span id="connectionBadge" class="badge warn">offline</span>
+        <span id="roleBadge" class="badge">viewer</span>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section id="terminal" aria-label="Codex terminal"></section>
+    </main>
+
+    <section class="controls" aria-label="Codex controls">
+      <form id="sendForm" class="send-row">
+        <input
+          id="lineInput"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          placeholder="输入消息，回车发送到 Codex"
+        />
+        <button id="sendButton" type="submit">发送</button>
+      </form>
+
+      <div class="button-grid">
+        <button type="button" data-macro="continue">继续 / Enter</button>
+        <button type="button" data-macro="approve">同意 y</button>
+        <button type="button" data-macro="reject">拒绝 n</button>
+        <button type="button" data-macro="ctrlC" class="danger-light">Ctrl+C</button>
+        <button id="takeControlButton" type="button">接管控制</button>
+        <button id="startButton" type="button">启动</button>
+        <button id="restartButton" type="button" class="danger-light">重启会话</button>
+        <button id="stopButton" type="button" class="danger">停止</button>
+      </div>
+
+      <details class="details">
+        <summary>状态</summary>
+        <pre id="statusPanel">等待连接...</pre>
+      </details>
+    </section>
+
+    <div id="toast" role="status" aria-live="polite"></div>
+
+    <script src="/vendor/xterm/lib/xterm.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

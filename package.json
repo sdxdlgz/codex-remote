@@ -1,0 +1,29 @@
+{
+  "name": "codex-remote",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mobile-friendly remote monitor and controller for a local Codex CLI session.",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test",
+    "tunnel:quick": "cloudflared tunnel --url http://127.0.0.1:8787"
+  },
+  "dependencies": {
+    "@xterm/xterm": "^5.5.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "node-pty": "^1.1.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/sdxdlgz/codex-remote.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sdxdlgz/codex-remote/issues"
+  },
+  "homepage": "https://github.com/sdxdlgz/codex-remote#readme"
+}
