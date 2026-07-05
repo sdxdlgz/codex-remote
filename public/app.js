@@ -1,46 +1,78 @@
-const terminalEl = document.getElementById('terminal');
-const subtitleEl = document.getElementById('subtitle');
-const connectionBadge = document.getElementById('connectionBadge');
-const roleBadge = document.getElementById('roleBadge');
-const sendForm = document.getElementById('sendForm');
-const lineInput = document.getElementById('lineInput');
-const sendButton = document.getElementById('sendButton');
-const takeControlButton = document.getElementById('takeControlButton');
-const startButton = document.getElementById('startButton');
-const restartButton = document.getElementById('restartButton');
-const stopButton = document.getElementById('stopButton');
-const statusPanel = document.getElementById('statusPanel');
-const toastEl = document.getElementById('toast');
+const el = {
+  terminal: document.getElementById('terminal'),
+  subtitle: document.getElementById('subtitle'),
+  connectionBadge: document.getElementById('connectionBadge'),
+  roleBadge: document.getElementById('roleBadge'),
+  connectionDot: document.getElementById('connectionDot'),
+  connectionDetail: document.getElementById('connectionDetail'),
+  endpointText: document.getElementById('endpointText'),
+  wsEndpointText: document.getElementById('wsEndpointText'),
+  retryButton: document.getElementById('retryButton'),
+  sessionDot: document.getElementById('sessionDot'),
+  sessionIdText: document.getElementById('sessionIdText'),
+  sessionStatusText: document.getElementById('sessionStatusText'),
+  sessionTimeText: document.getElementById('sessionTimeText'),
+  cwdText: document.getElementById('cwdText'),
+  roleText: document.getElementById('roleText'),
+  clientIdText: document.getElementById('clientIdText'),
+  controllerText: document.getElementById('controllerText'),
+  clientsText: document.getElementById('clientsText'),
+  terminalHint: document.getElementById('terminalHint'),
+  clearButton: document.getElementById('clearButton'),
+  sendForm: document.getElementById('sendForm'),
+  lineInput: document.getElementById('lineInput'),
+  sendButton: document.getElementById('sendButton'),
+  takeControlButton: document.getElementById('takeControlButton'),
+  startButton: document.getElementById('startButton'),
+  restartButton: document.getElementById('restartButton'),
+  stopButton: document.getElementById('stopButton'),
+  statusPanel: document.getElementById('statusPanel'),
+  toast: document.getElementById('toast')
+};
 
 const term = new Terminal({
   cursorBlink: true,
   convertEol: false,
-  fontFamily: 'Consolas, "Cascadia Mono", "SFMono-Regular", monospace',
+  fontFamily: '"Cascadia Mono", Consolas, "SFMono-Regular", monospace',
   fontSize: 13,
-  lineHeight: 1.1,
-  scrollback: 5000,
+  lineHeight: 1.15,
+  scrollback: 8000,
   theme: {
-    background: '#070b14',
-    foreground: '#eef4ff',
-    cursor: '#74c0fc',
-    selectionBackground: '#335c81'
+    background: '#050816',
+    foreground: '#e5ecff',
+    cursor: '#7dd3fc',
+    selectionBackground: '#31476d',
+    black: '#0b1020',
+    red: '#fb7185',
+    green: '#4ade80',
+    yellow: '#facc15',
+    blue: '#60a5fa',
+    magenta: '#c084fc',
+    cyan: '#22d3ee',
+    white: '#e5e7eb'
   }
 });
-term.open(terminalEl);
-term.writeln('\x1b[36mCodex Remote\x1b[0m connecting...');
+term.open(el.terminal);
+term.writeln('\x1b[36mCodex Remote\x1b[0m connecting to WebSocket...');
 
 const state = {
   ws: null,
   connected: false,
+  socketOpen: false,
+  phase: 'connecting',
+  detail: 'Preparing connection...',
   role: 'viewer',
   id: '',
   config: null,
   session: null,
   clients: [],
+  controllerId: null,
   reconnectMs: 750,
+  reconnectTimer: null,
   toastTimer: null,
   lastCols: 100,
-  lastRows: 30
+  lastRows: 30,
+  lastClose: null
 };
 
 function wsUrl() {
@@ -48,70 +80,136 @@ function wsUrl() {
   return `${protocol}//${window.location.host}/ws`;
 }
 
-function showToast(message) {
-  toastEl.textContent = message;
-  toastEl.classList.add('show');
-  window.clearTimeout(state.toastTimer);
-  state.toastTimer = window.setTimeout(() => toastEl.classList.remove('show'), 2200);
+function shortId(value) {
+  if (!value) return '-';
+  const text = String(value);
+  return text.length > 12 ? `${text.slice(0, 6)}...${text.slice(-6)}` : text;
 }
 
-function badge(el, text, mode = '') {
-  el.textContent = text;
-  el.className = `badge ${mode}`.trim();
+function formatTime(value) {
+  if (!value) return '-';
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit'
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
+function classForConnection() {
+  if (state.connected) return 'ok';
+  if (state.phase === 'error' || state.phase === 'closed') return 'danger';
+  return 'warn';
+}
+
+function classForSession(status) {
+  if (status === 'running') return 'ok';
+  if (status === 'starting' || status === 'stopping') return 'warn';
+  if (status === 'error') return 'danger';
+  return 'muted';
+}
+
+function setPill(node, text, mode) {
+  node.textContent = text;
+  node.className = `pill ${mode || 'muted'}`;
+}
+
+function setDot(node, mode) {
+  node.className = `dot ${mode || 'muted'}`;
+}
+
+function showToast(message) {
+  el.toast.textContent = message;
+  el.toast.classList.add('show');
+  window.clearTimeout(state.toastTimer);
+  state.toastTimer = window.setTimeout(() => el.toast.classList.remove('show'), 2600);
+}
+
+function controllerClient() {
+  return state.clients.find((client) => client.id === state.controllerId || client.role === 'controller');
 }
 
 function updateControls() {
   const isController = state.connected && state.role === 'controller';
-  sendButton.disabled = !isController;
-  lineInput.disabled = !isController;
+  el.sendButton.disabled = !isController;
+  el.lineInput.disabled = !isController;
   document.querySelectorAll('[data-macro]').forEach((button) => {
     button.disabled = !isController;
   });
-  startButton.disabled = !isController || state.session?.status === 'running';
-  stopButton.disabled = !isController || state.session?.status !== 'running';
-  restartButton.disabled = !isController;
-  takeControlButton.disabled = !state.connected || isController;
+  el.startButton.disabled = !isController || state.session?.status === 'running' || state.session?.status === 'starting';
+  el.stopButton.disabled = !isController || state.session?.status !== 'running';
+  el.restartButton.disabled = !isController;
+  el.takeControlButton.disabled = !state.connected || isController;
+
+  if (!state.connected) el.lineInput.placeholder = `Waiting for ${wsUrl()} ...`;
+  else if (!isController) el.lineInput.placeholder = 'Viewer mode. Tap "Take control" before typing.';
+  else el.lineInput.placeholder = 'Type a message and press Enter';
 }
 
 function updateStatusPanel() {
   const payload = {
-    connected: state.connected,
+    page: window.location.origin,
+    websocket: wsUrl(),
+    connection: {
+      connected: state.connected,
+      socketOpen: state.socketOpen,
+      phase: state.phase,
+      detail: state.detail,
+      lastClose: state.lastClose
+    },
     role: state.role,
-    id: state.id,
+    browserConnectionId: state.id,
+    controllerId: state.controllerId,
     session: state.session,
-    clients: state.clients.map((client) => ({
-      role: client.role,
-      email: client.email,
-      connectedAt: client.connectedAt
-    })),
+    clients: state.clients,
     config: state.config
-      ? {
-          publicUrl: state.config.publicUrl,
-          command: state.config.command,
-          cwd: state.config.cwd,
-          requireCloudflareAccess: state.config.requireCloudflareAccess
-        }
-      : null
   };
-  statusPanel.textContent = JSON.stringify(payload, null, 2);
-
-  const sessionStatus = state.session?.status || 'unknown';
-  const who = state.clients.find((client) => client.id === state.id)?.email || '';
-  subtitleEl.textContent = `${sessionStatus} · ${who || 'unknown user'}`;
+  el.statusPanel.textContent = JSON.stringify(payload, null, 2);
 }
 
 function updateUi() {
-  if (state.connected) badge(connectionBadge, 'online', 'ok');
-  else badge(connectionBadge, 'offline', 'danger');
+  const connMode = classForConnection();
+  const status = state.session?.status || 'unknown';
+  const sessionMode = classForSession(status);
+  const currentController = controllerClient();
 
-  badge(roleBadge, state.role, state.role === 'controller' ? 'ok' : 'warn');
+  setPill(el.connectionBadge, state.connected ? 'connected' : state.phase === 'reconnecting' ? 'reconnecting' : 'offline', connMode);
+  setPill(el.roleBadge, state.role === 'controller' ? 'controller' : 'viewer', state.role === 'controller' ? 'ok' : 'warn');
+  setDot(el.connectionDot, connMode);
+  setDot(el.sessionDot, sessionMode);
+
+  el.subtitle.textContent = state.connected
+    ? `${state.session?.sessionLabel || 'not started'} | ${status} | ${state.config?.publicUrl || window.location.origin}`
+    : `Connecting to ${wsUrl()}`;
+
+  el.connectionDetail.textContent = state.detail;
+  el.endpointText.textContent = window.location.origin;
+  el.wsEndpointText.textContent = wsUrl();
+
+  el.sessionIdText.textContent = state.session?.sessionLabel || state.session?.sessionId || 'not started';
+  el.sessionStatusText.textContent = status;
+  el.sessionTimeText.textContent = state.session?.startedAt ? `${formatTime(state.session.startedAt)} start` : '-';
+  el.cwdText.textContent = `cwd: ${state.session?.cwd || state.config?.cwd || '-'}`;
+
+  el.roleText.textContent = state.role === 'controller' ? 'controller, can type' : 'viewer, take control first';
+  el.clientIdText.textContent = shortId(state.id);
+  el.controllerText.textContent = currentController
+    ? `${currentController.email || 'local'} / ${shortId(currentController.id)}`
+    : '-';
+  el.clientsText.textContent = `${state.clients.length}`;
+
+  el.terminalHint.textContent = state.session?.sessionId
+    ? `${state.session.sessionId} | ${state.session.command}`
+    : 'no Codex session yet';
+
   updateControls();
   updateStatusPanel();
 }
 
 function send(payload) {
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-    showToast('WebSocket 未连接');
+    showToast('WebSocket is not connected; retrying');
     return false;
   }
   state.ws.send(JSON.stringify(payload));
@@ -120,16 +218,16 @@ function send(payload) {
 
 function sendInput(data) {
   if (state.role !== 'controller') {
-    showToast('当前是只读模式，请先接管控制');
+    showToast('Viewer mode: take control first');
     return false;
   }
   return send({ type: 'input', data });
 }
 
 function calculateTerminalSize() {
-  const rect = terminalEl.getBoundingClientRect();
-  const cols = Math.max(20, Math.min(300, Math.floor((rect.width - 16) / 8.1)));
-  const rows = Math.max(5, Math.min(120, Math.floor((rect.height - 16) / 15.5)));
+  const rect = el.terminal.getBoundingClientRect();
+  const cols = Math.max(20, Math.min(300, Math.floor((rect.width - 18) / 8.1)));
+  const rows = Math.max(5, Math.min(120, Math.floor((rect.height - 18) / 15.5)));
   return { cols, rows };
 }
 
@@ -148,15 +246,26 @@ function scheduleResize() {
   resizeTimer = window.setTimeout(resizeTerminal, 120);
 }
 
+function setPhase(phase, detail) {
+  state.phase = phase;
+  state.detail = detail;
+  updateUi();
+}
+
 function handleMessage(message) {
   if (message.type === 'hello') {
     state.connected = true;
+    state.socketOpen = true;
+    state.phase = 'connected';
+    state.detail = 'Connected to Codex Remote server';
     state.id = message.id;
     state.role = message.role;
     state.config = message.config;
     state.session = message.session;
+    state.controllerId = message.controllerId;
     state.clients = message.clients || [];
     term.clear();
+    term.writeln(`\x1b[32m[remote]\x1b[0m connected: ${message.session?.sessionLabel || message.session?.sessionId || 'not started'}`);
     resizeTerminal();
     updateUi();
     return;
@@ -179,6 +288,7 @@ function handleMessage(message) {
   }
 
   if (message.type === 'presence') {
+    state.controllerId = message.controllerId;
     state.clients = message.clients || [];
     const me = state.clients.find((client) => client.id === state.id);
     if (me) state.role = me.role;
@@ -188,7 +298,7 @@ function handleMessage(message) {
 
   if (message.type === 'role') {
     state.role = message.role;
-    showToast(message.role === 'controller' ? '你现在拥有控制权' : '你现在是只读模式');
+    showToast(message.role === 'controller' ? 'You are now the controller' : 'You are now a viewer');
     updateUi();
     resizeTerminal();
     return;
@@ -197,20 +307,35 @@ function handleMessage(message) {
   if (message.type === 'error') {
     showToast(message.message || 'Unknown error');
     term.writeln(`\r\n\x1b[31m[remote] ${message.message || 'Unknown error'}\x1b[0m`);
-    return;
   }
 }
 
+function scheduleReconnect() {
+  window.clearTimeout(state.reconnectTimer);
+  const wait = state.reconnectMs;
+  setPhase('reconnecting', `Disconnected. Reconnecting to ${wsUrl()} in ${Math.round(wait / 1000)}s`);
+  state.reconnectTimer = window.setTimeout(connect, wait);
+  state.reconnectMs = Math.min(Math.round(state.reconnectMs * 1.6), 8000);
+}
+
 function connect() {
+  window.clearTimeout(state.reconnectTimer);
+  if (state.ws && [WebSocket.OPEN, WebSocket.CONNECTING].includes(state.ws.readyState)) {
+    try { state.ws.close(); } catch {}
+  }
+
   state.connected = false;
-  updateUi();
+  state.socketOpen = false;
+  state.role = state.role || 'viewer';
+  setPhase('connecting', `Connecting to ${wsUrl()}`);
+
   const ws = new WebSocket(wsUrl());
   state.ws = ws;
 
   ws.addEventListener('open', () => {
-    state.connected = true;
+    state.socketOpen = true;
     state.reconnectMs = 750;
-    updateUi();
+    setPhase('opening', 'WebSocket opened; waiting for session metadata...');
   });
 
   ws.addEventListener('message', (event) => {
@@ -218,21 +343,22 @@ function connect() {
       handleMessage(JSON.parse(event.data));
     } catch (error) {
       console.error(error);
-      showToast('收到无法解析的服务器消息');
+      showToast('Received an invalid server message');
     }
   });
 
-  ws.addEventListener('close', () => {
+  ws.addEventListener('close', (event) => {
     state.connected = false;
+    state.socketOpen = false;
     state.role = 'viewer';
-    updateUi();
-    term.writeln('\r\n\x1b[33m[remote] disconnected, reconnecting...\x1b[0m');
-    window.setTimeout(connect, state.reconnectMs);
-    state.reconnectMs = Math.min(state.reconnectMs * 1.6, 8000);
+    state.lastClose = { code: event.code, reason: event.reason || '', at: new Date().toISOString() };
+    term.writeln(`\r\n\x1b[33m[remote] disconnected code=${event.code}; reconnecting...\x1b[0m`);
+    scheduleReconnect();
   });
 
   ws.addEventListener('error', () => {
-    showToast('连接失败，正在重试');
+    setPhase('error', `Connection failed. Check login, PC power, and tunnel. Target: ${wsUrl()}`);
+    showToast('Connection failed; automatic retry is enabled');
   });
 }
 
@@ -240,31 +366,33 @@ term.onData((data) => {
   sendInput(data);
 });
 
-sendForm.addEventListener('submit', (event) => {
+el.sendForm.addEventListener('submit', (event) => {
   event.preventDefault();
-  const text = lineInput.value;
+  const text = el.lineInput.value;
   if (!text) return;
-  if (sendInput(`${text}\r`)) lineInput.value = '';
+  if (sendInput(`${text}\r`)) el.lineInput.value = '';
 });
 
 document.querySelectorAll('[data-macro]').forEach((button) => {
-  button.addEventListener('click', () => {
-    send({ type: 'macro', name: button.dataset.macro });
-  });
+  button.addEventListener('click', () => send({ type: 'macro', name: button.dataset.macro }));
 });
 
-takeControlButton.addEventListener('click', () => send({ type: 'takeControl' }));
-startButton.addEventListener('click', () => send({ type: 'start' }));
-stopButton.addEventListener('click', () => {
-  if (window.confirm('停止当前 Codex 会话？')) send({ type: 'stop' });
+el.retryButton.addEventListener('click', () => {
+  state.reconnectMs = 750;
+  connect();
 });
-restartButton.addEventListener('click', () => {
-  if (window.confirm('重启会清空页面回放并重新启动 Codex，会继续吗？')) send({ type: 'restart' });
+el.clearButton.addEventListener('click', () => term.clear());
+el.takeControlButton.addEventListener('click', () => send({ type: 'takeControl' }));
+el.startButton.addEventListener('click', () => send({ type: 'start' }));
+el.stopButton.addEventListener('click', () => {
+  if (window.confirm('Stop the current Codex session?')) send({ type: 'stop' });
+});
+el.restartButton.addEventListener('click', () => {
+  if (window.confirm('Restarting creates a new session ID and clears the replay buffer. Continue?')) send({ type: 'restart' });
 });
 
 window.addEventListener('resize', scheduleResize);
 window.addEventListener('orientationchange', scheduleResize);
-setTimeout(resizeTerminal, 50);
-connect();
+setTimeout(resizeTerminal, 80);
 updateUi();
-
+connect();

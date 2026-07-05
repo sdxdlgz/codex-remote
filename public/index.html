@@ -9,19 +9,66 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div>
-        <h1>Codex Remote</h1>
-        <p id="subtitle">Connecting...</p>
+    <header class="hero">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">C</div>
+        <div class="brand-copy">
+          <h1>Codex Remote</h1>
+          <p id="subtitle">Preparing connection...</p>
+        </div>
       </div>
-      <div class="badges">
-        <span id="connectionBadge" class="badge warn">offline</span>
-        <span id="roleBadge" class="badge">viewer</span>
+      <div class="top-pills">
+        <span id="connectionBadge" class="pill warn">connecting</span>
+        <span id="roleBadge" class="pill muted">viewer</span>
       </div>
     </header>
 
+    <section class="status-strip" aria-label="Connection and session status">
+      <article class="status-card connection-card">
+        <div class="card-title">
+          <span id="connectionDot" class="dot warn"></span>
+          <span>Connection</span>
+        </div>
+        <div id="connectionDetail" class="primary-line">Waiting for WebSocket...</div>
+        <div class="meta-line">Page: <span id="endpointText">-</span></div>
+        <div class="meta-line">WebSocket: <span id="wsEndpointText">-</span></div>
+        <button id="retryButton" class="tiny-button" type="button">Reconnect now</button>
+      </article>
+
+      <article class="status-card session-card">
+        <div class="card-title">
+          <span class="dot" id="sessionDot"></span>
+          <span>Codex Session</span>
+        </div>
+        <div class="primary-line"><span id="sessionIdText">not started</span></div>
+        <div class="meta-line">Status: <span id="sessionStatusText">unknown</span></div>
+        <div class="meta-line">Started: <span id="sessionTimeText">-</span></div>
+        <div class="meta-line monospace" id="cwdText">cwd: -</div>
+      </article>
+
+      <article class="status-card client-card">
+        <div class="card-title">
+          <span class="dot ok"></span>
+          <span>Control</span>
+        </div>
+        <div class="primary-line">You are: <span id="roleText">viewer</span></div>
+        <div class="meta-line">Browser ID: <span id="clientIdText">-</span></div>
+        <div class="meta-line">Controller: <span id="controllerText">-</span></div>
+        <div class="meta-line">Online clients: <span id="clientsText">0</span></div>
+      </article>
+    </section>
+
     <main class="shell">
-      <section id="terminal" aria-label="Codex terminal"></section>
+      <div class="terminal-panel">
+        <div class="terminal-toolbar">
+          <div>
+            <strong>Terminal</strong>
+            <span id="terminalHint">waiting for server output</span>
+          </div>
+          <button id="clearButton" type="button" class="tiny-button ghost">Clear</button>
+        </div>
+        <section id="terminal" aria-label="Codex terminal"></section>
+      </div>
     </main>
 
     <section class="controls" aria-label="Codex controls">
@@ -31,25 +78,25 @@
           autocomplete="off"
           autocapitalize="off"
           spellcheck="false"
-          placeholder="输入消息，回车发送到 Codex"
+          placeholder="Waiting for Codex connection..."
         />
-        <button id="sendButton" type="submit">发送</button>
+        <button id="sendButton" type="submit">Send</button>
       </form>
 
       <div class="button-grid">
-        <button type="button" data-macro="continue">继续 / Enter</button>
-        <button type="button" data-macro="approve">同意 y</button>
-        <button type="button" data-macro="reject">拒绝 n</button>
+        <button type="button" data-macro="continue">Continue / Enter</button>
+        <button type="button" data-macro="approve">Approve y</button>
+        <button type="button" data-macro="reject">Reject n</button>
         <button type="button" data-macro="ctrlC" class="danger-light">Ctrl+C</button>
-        <button id="takeControlButton" type="button">接管控制</button>
-        <button id="startButton" type="button">启动</button>
-        <button id="restartButton" type="button" class="danger-light">重启会话</button>
-        <button id="stopButton" type="button" class="danger">停止</button>
+        <button id="takeControlButton" type="button">Take control</button>
+        <button id="startButton" type="button">Start Codex</button>
+        <button id="restartButton" type="button" class="danger-light">New session</button>
+        <button id="stopButton" type="button" class="danger">Stop</button>
       </div>
 
       <details class="details">
-        <summary>状态</summary>
-        <pre id="statusPanel">等待连接...</pre>
+        <summary>Debug details</summary>
+        <pre id="statusPanel">Waiting for connection...</pre>
       </details>
     </section>
 

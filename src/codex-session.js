@@ -1,4 +1,5 @@
 import { EventEmitter, once } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import pty from 'node-pty';
 
 const DEFAULT_COLS = 100;
@@ -37,6 +38,9 @@ export class CodexSession extends EventEmitter {
     this.exitCode = null;
     this.signal = null;
     this.lastError = '';
+    this.sessionNumber = 0;
+    this.sessionId = null;
+    this.sessionLabel = '未启动';
   }
 
   snapshot() {
@@ -46,6 +50,9 @@ export class CodexSession extends EventEmitter {
       status: this.status,
       cols: this.cols,
       rows: this.rows,
+      sessionId: this.sessionId,
+      sessionLabel: this.sessionLabel,
+      sessionNumber: this.sessionNumber,
       startedAt: this.startedAt,
       endedAt: this.endedAt,
       exitCode: this.exitCode,
@@ -58,6 +65,10 @@ export class CodexSession extends EventEmitter {
     if (this.ptyProcess) return this.snapshot();
 
     const shell = getShellCommand(this.command);
+    this.sessionNumber += 1;
+    const suffix = randomUUID().slice(0, 8);
+    this.sessionId = `codex-${String(this.sessionNumber).padStart(4, '0')}-${suffix}`;
+    this.sessionLabel = `#${String(this.sessionNumber).padStart(4, '0')} · ${suffix}`;
     this.status = 'starting';
     this.startedAt = new Date().toISOString();
     this.endedAt = null;
