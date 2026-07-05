@@ -22,6 +22,8 @@ test('resolveConfig applies safe defaults', () => {
   assert.equal(config.port, 8787);
   assert.equal(config.command, 'codex');
   assert.equal(config.autoStart, true);
+  assert.equal(config.appAuthToken, '');
+  assert.equal(config.authCookieName, 'codex_remote_token');
   assert.equal(config.requireCloudflareAccess, false);
 });
 

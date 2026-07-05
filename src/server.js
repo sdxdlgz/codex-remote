@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 
-import { authorizeRequest, httpAuthMiddleware } from './auth.js';
+import { authorizeRequest, hasValidAppToken, httpAuthMiddleware, isAppTokenValueValid } from './auth.js';
 import { CodexSession } from './codex-session.js';
 import { resolveConfig } from './config.js';
 import { ScrollbackBuffer } from './scrollback-buffer.js';
@@ -26,9 +26,90 @@ const session = new CodexSession({ command: config.command, cwd: config.cwd });
 const app = express();
 app.disable('x-powered-by');
 if (config.trustProxy) app.set('trust proxy', true);
+app.use(express.urlencoded({ extended: false }));
 
 app.get('/healthz', (_req, res) => {
   res.json({ ok: true, session: session.snapshot() });
+});
+
+function isSecureRequest(req) {
+  return req.secure || req.headers['x-forwarded-proto'] === 'https';
+}
+
+function authCookieOptions(req) {
+  return {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: isSecureRequest(req),
+    path: '/',
+    maxAge: 1000 * 60 * 60 * 24 * 30
+  };
+}
+
+function sanitizeNext(value) {
+  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') ? value : '/';
+}
+
+function renderLoginPage({ error = '', next = '/' } = {}) {
+  const safeNext = String(next || '/').replaceAll('"', '&quot;');
+  const errorHtml = error ? `<p class="error">${error}</p>` : '';
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Codex Remote Login</title>
+    <style>
+      :root { color-scheme: dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #0b1020; color: #eef4ff; }
+      main { width: min(92vw, 420px); padding: 26px; border: 1px solid rgba(255,255,255,.12); border-radius: 18px; background: #121a2f; box-shadow: 0 24px 80px rgba(0,0,0,.35); }
+      h1 { margin: 0 0 8px; font-size: 22px; }
+      p { color: #9fb0d0; line-height: 1.5; }
+      label { display: block; margin: 18px 0 8px; color: #cfe1ff; }
+      input, button { width: 100%; min-height: 44px; border-radius: 12px; font: inherit; box-sizing: border-box; }
+      input { border: 1px solid rgba(255,255,255,.16); padding: 10px 12px; background: #18223a; color: #eef4ff; }
+      button { margin-top: 14px; border: 0; background: #2f81f7; color: white; font-weight: 650; }
+      .error { color: #ff9b9b; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Codex Remote</h1>
+      <p>请输入部署时生成的访问口令。</p>
+      ${errorHtml}
+      <form method="post" action="/login">
+        <input type="hidden" name="next" value="${safeNext}" />
+        <label for="token">访问口令</label>
+        <input id="token" name="token" type="password" autocomplete="current-password" autofocus required />
+        <button type="submit">登录</button>
+      </form>
+    </main>
+  </body>
+</html>`;
+}
+
+app.get('/login', (req, res) => {
+  if (!config.appAuthToken || hasValidAppToken(req, config)) {
+    res.redirect(sanitizeNext(req.query.next));
+    return;
+  }
+  res.type('html').send(renderLoginPage({ next: sanitizeNext(req.query.next) }));
+});
+
+app.post('/login', (req, res) => {
+  const next = sanitizeNext(req.body.next);
+  if (!isAppTokenValueValid(req.body.token, config)) {
+    res.status(401).type('html').send(renderLoginPage({ error: '口令不正确。', next }));
+    return;
+  }
+  res.cookie(config.authCookieName, config.appAuthToken, authCookieOptions(req));
+  res.redirect(next);
+});
+
+app.get('/logout', (req, res) => {
+  res.clearCookie(config.authCookieName, { path: '/', secure: isSecureRequest(req), sameSite: 'lax' });
+  res.redirect('/login');
 });
 
 app.use(httpAuthMiddleware(config));
@@ -62,6 +143,7 @@ function publicConfig() {
     publicUrl: config.publicUrl,
     command: config.command,
     cwd: config.cwd,
+    authRequired: Boolean(config.appAuthToken),
     requireCloudflareAccess: config.requireCloudflareAccess,
     allowControlTakeover: config.allowControlTakeover,
     maxInputBytes: config.maxInputBytes

@@ -37,6 +37,8 @@ export function resolveConfig(env = process.env) {
     historyBytes: parsePositiveInt(env.REMOTE_HISTORY_BYTES, 1024 * 1024),
     maxInputBytes: parsePositiveInt(env.MAX_INPUT_BYTES, 8 * 1024),
     allowControlTakeover: parseBool(env.ALLOW_CONTROL_TAKEOVER, true),
+    appAuthToken: env.REMOTE_AUTH_TOKEN || env.CODEX_REMOTE_AUTH_TOKEN || '',
+    authCookieName: env.AUTH_COOKIE_NAME || 'codex_remote_token',
     requireCloudflareAccess: parseBool(env.REQUIRE_CF_ACCESS, false),
     allowedEmails: parseCsv(env.ACCESS_ALLOWED_EMAILS).map((email) => email.toLowerCase()),
     allowedOrigins: parseCsv(env.ALLOWED_ORIGINS),
